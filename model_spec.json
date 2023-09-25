@@ -1,0 +1,35 @@
+{
+    "Target variables": [
+		"TBCA Oxota", 
+		"OOH Oxota",
+		"Buy m.o. Oxota", 
+		"Trial Oxota", 
+		"Unaided Oxota", 
+		"Consider T1 Oxota"
+	],
+	"Campaign variables": [
+        {
+            "Name": "OOH freq",
+            "Alpha": 2,
+            "Gamma": 12
+        },
+        {
+            "Name": "Instore freq",
+            "Alpha": 2,
+            "Gamma": 4
+        },
+        {
+            "Name": "Bar freq",
+            "Alpha": 8,
+            "Gamma": 4
+        }
+    ],
+    "Other variables": [
+        "Volume",
+		"Media coverage"
+    ],
+    "Subsample variables": [
+		"Buy m.o. Oxota", 
+		"Trial Oxota"
+	]
+}
