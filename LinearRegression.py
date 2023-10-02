@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 from sklearn import linear_model
+from sklearn.metrics import r2_score
 from scipy import stats
 
 
@@ -37,11 +38,12 @@ class LR(linear_model.LinearRegression):
 class SubSampleRegression:
     s_name = None
     fit_done = False
+    version = 1.001
 
     def __init__(self, p_value) -> None:
         self.p_margin = p_value
 
-    def Fit(self, data, X_names, y_name, s_name=None): 
+    def Fit(self, data: pd.DataFrame, X_names: list, y_name: str, s_name=None):  
         assert all([x in data.columns for x in X_names]), "SubSampleRegression: в данных нет переменных X_name"
         assert y_name in data.columns, "SubSampleRegression: в данных нет переменных y_name"
 
@@ -55,6 +57,8 @@ class SubSampleRegression:
         else:
             self.X_names = X_names
             self.fit_internal_total(data, y_name)
+        
+        return self
 
     def fit_internal_split(self, data, y_name): 
         self.betas = pd.DataFrame(columns=self.X_names)
@@ -103,7 +107,8 @@ class SubSampleRegression:
     def Predict(self, data): 
         return self.Contributions(data).sum(axis=1)
     
-    def Score(self, data, y_name): 
-        y_predicted = self.Predict(data)
-        y_actual = data[y_name] 
-        return 1 - ((y_actual - y_predicted) ** 2).sum() / ((y_actual - y_actual.mean()) ** 2).sum()
+    def Score(self, data: pd.DataFrame, y_name: str) -> float: 
+        #y_predicted = self.Predict(data)
+        #y_actual = data[y_name] 
+        #return 1 - ((y_actual - y_predicted) ** 2).sum() / ((y_actual - y_actual.mean()) ** 2).sum()
+        return r2_score(data[y_name], self.Predict(data))

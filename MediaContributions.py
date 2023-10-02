@@ -3,7 +3,7 @@ import pandas as pd
 
 import json
 
-from LinearRegression import LR
+from LinearRegression import LR, SubSampleRegression
 from HillsTransformation import HillsTransformation
 
 
@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 class MediaContributionCalculator: 
     obligatory_sections = ['Target variables', 'Campaign variables']
     campaign_var_definition = ['Name', 'Alpha', 'Gamma']
+    campaign_var_suffix = '_dr'
     version = 1.001
     
     def __init__(self, p_value=0.05, correct_base=False): 
@@ -81,6 +82,10 @@ class MediaContributionCalculator:
                     model_spec['Relevance groups variable'] + "' нет в данных"
              assert model_spec['Relevance groups variable'] not in model_spec['Target variables'], \
                 "Ошибка спецификации модели: одна и та же переменная в Relevance groups variable и Target variables. Так не работает"
+        elif isinstance(model_spec['Relevance groups variable'], list):
+             assert all([v in model_data.columns for v in model_spec['Relevance groups variable']]), \
+                "Ошибка спецификации модели:  не все Relevance groups variable есть в данных"""
+             ######## проверка что нет среди таргетов 
         else: 
             assert False, """Ошибка спецификации модели: Relevance groups variable неверный формат. 
                              Принимается только ОДНА переменная. Может быть только строкой, None, или отсутсвовать"""
@@ -231,6 +236,43 @@ class MediaContributionCalculator:
         ax.set_xticks(x_axis)
 
         return pd.DataFrame(model_log)
+    
+    def TransformCampaignVars_internal(self, model_data, model_spec):
+        camp_vars = []
+        for c in model_spec['Campaign variables']:
+            model_data[c['Name']+self.campaign_var_suffix] = HillsTransformation(model_data[c['Name']], c['Alpha'], c['Gamma'])
+            camp_vars.append(c['Name']+self.campaign_var_suffix)
+        return camp_vars
+    
+    def FitOneModel_internal(self, data,  X_names, y_name, RG_name=None, p_value=0.05): 
+        return SubSampleRegression(p_value).Fit(data, X_names, y_name, RG_name)
+        
+    
+    def ValidateRGVariables(self, model_data: pd.DataFrame, model_spec: dict) -> pd.DataFrame: 
+        assert(isinstance(model_spec['Relevance groups variable'], list)), "Ожидаем list в Relevance groups variable"
+        
+        data = model_data.copy()
+        campaign_vars = self.TransformCampaignVars_internal(data, model_spec)
+        data['Base'] = 1
+        
+        log_ = []
+        X_names = campaign_vars + model_spec['Other variables'] + ['Base']
+        for rg_var in model_spec['Relevance groups variable']:
+            for target_var in model_spec['Target variables']: 
+                reg = self.FitOneModel_internal(data, X_names, target_var, rg_var, 1)
+                r2 = round(reg.Score(data, target_var), 3)
+                index_arr = [
+                    [rg_var + '->' + target_var] * len(reg.betas), 
+                    [r2] * len(reg.betas), 
+                    reg.betas.index 
+                ]
+                record_index = pd.MultiIndex.from_arrays(index_arr, names=['RG var -> target var', 'R2', 'RG values'])
+                log_.append(
+                    reg.betas.set_index(record_index)
+                )
+
+        return pd.concat(log_)
+
 
 
 
