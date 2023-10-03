@@ -8,6 +8,7 @@ from HillsTransformation import HillsTransformation
 
 
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 
 class MediaContributionCalculator: 
@@ -250,7 +251,7 @@ class MediaContributionCalculator:
             camp_vars.append(c['Name']+self.campaign_var_suffix)
         return camp_vars
     
-    def FitOneModel_internal(self, data: pd.DataFrame,  X_names: list, y_name: str, RG_name=None, p_value: float =0.05) -> SubSampleRegression: 
+    def FitOneModel_internal(self, data: pd.DataFrame,  X_names: list, y_name: str, RG_name: str=None, p_value: float =0.05) -> SubSampleRegression: 
         return SubSampleRegression(p_value).Fit(data, X_names, y_name, RG_name)
         
     
@@ -279,6 +280,61 @@ class MediaContributionCalculator:
                 )
 
         return pd.concat(log_)
+    
+
+    def __ExploreDiminishingReturn__OneTarget(self, model_data: pd.DataFrame, model_spec: list, target_var: str, camp_var: str) -> pd.DataFrame:
+        assert (model_spec['Relevance groups variable'] is None) or isinstance(model_spec['Relevance groups variable'], str), \
+            "В этом тесте Relevance groups variable должно быть None или строкой"
+        
+        alpha_range = [0.1, 0.2, 0.5, 1, 2, 4, 8, 16]
+        gamma_range = [1, 2, 4, 6, 8, 10, 12, 14]
+
+        fit_results = pd.DataFrame(index=alpha_range, columns=gamma_range, dtype='float')
+        
+        data = model_data.copy()
+        data['Base'] = 1 
+
+        X_names = model_spec['Other variables'] + ['Base']
+
+        for alpha in alpha_range:
+            for gamma in gamma_range: 
+                data[camp_var + '_dr_transformed'] = HillsTransformation(data[camp_var], alpha, gamma) 
+                X_names_for_this_model = [camp_var + '_dr_transformed'] + X_names
+                model = self.FitOneModel_internal(data, X_names_for_this_model, target_var, model_spec['Relevance groups variable'], 1)
+                fit_results.loc[alpha, gamma] = model.Score(data, target_var)
+                
+        fit_results.index.set_names('Alpha', inplace=True)
+        fit_results.columns.set_names('Gamma', inplace=True)
+        
+        position_of_max = np.unravel_index(np.argmax(fit_results), fit_results.shape) 
+        alpha_best = fit_results.index[position_of_max[0]]
+        gamma_best = fit_results.columns[position_of_max[1]]
+        print('For model {}->{}, best alpha: {}, best gamma: {}'.format(camp_var, target_var, alpha_best, gamma_best))
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5))
+        sns.heatmap(fit_results, annot=True, ax=ax1)
+        
+        x_line = np.arange(0, 30, dtype='double')
+        ax2.plot(x_line, HillsTransformation(x_line, alpha_best, gamma_best), 
+                label='alpha:' + str(alpha_best) + ' gamma:' + str(gamma_best))
+        ax2.legend()
+        
+        plt.show()
+        
+        return fit_results.set_index(
+            pd.MultiIndex.from_arrays([[camp_var + '->' + target_var] * len(fit_results), fit_results.index])
+        )
+    
+    def __ExploreDiminishingReturn__MultiTarget(self, model_data: pd.DataFrame, model_spec: list, camp_var: str) -> pd.DataFrame:
+        return pd.concat(
+            [self.__ExploreDiminishingReturn__OneTarget(model_data, model_spec, t, camp_var) for t in model_spec['Target variables']]
+        )
+    
+    def ExploreDiminishingReturn(self, model_data: pd.DataFrame, model_spec: list) -> pd.DataFrame:
+        return pd.concat(
+            [self.__ExploreDiminishingReturn__MultiTarget(model_data, model_spec, c['Name']) for c in model_spec['Campaign variables']]
+        )
+
 
 
 
