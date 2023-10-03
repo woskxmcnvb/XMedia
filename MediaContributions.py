@@ -186,56 +186,62 @@ class MediaContributionCalculator:
         else: 
             print(result)
 
-    def ValidateNonCampaignVariables(self, model_data, target_var, model_spec): 
-        assert isinstance(model_spec['Other variables'], list), "Ошибка спецификации: ожидается непустой список в other variables"
-        assert len(model_spec['Other variables']) > 0, "Ошибка спецификации: ожидается непустой список в other variables"
 
-        data = model_data.copy()  # копируем чтобы не сохранять мусор
-        data['Base'] = 1   # intercept для регрессии
-        
+    def __ValidateNonCampaignVariables_OneTarget(self, model_data: pd.DataFrame, model_spec: list, target_var: str) -> pd.DataFrame:
+        assert isinstance(model_spec['Other variables'], list), "Ошибка спецификации: ожидается непустой список в other variables"
+        assert len(model_spec['Other variables']) > 0, "Ошибка спецификации: ожидается непустой список в other variables" 
+        assert (model_spec['Relevance groups variable'] is None) or isinstance(model_spec['Relevance groups variable'], str), \
+            "Ошибка спецификации: ожидается None или строка в Relevance groups variable"
+
+        data = model_data.copy()
+        campaign_vars = self.TransformCampaignVars_internal(data, model_spec)
+        data['Base'] = 1
+
         X_names = ['Base']
 
-        model_log = []
-        R2_log = []
-
-        model_log_index = pd.Index(
-            ['Model', 'R2'] +\
-            ['Beta ' + x for x in (['Base'] + model_spec['Other variables'])] +\
-            ['P-value ' + x for x in (['Base'] + model_spec['Other variables'])]
-        )
-
+        log_ = []
+        r2_log_ = []
         while len(X_names) <= len(model_spec['Other variables']): 
             r2_max = 0
             next_candidate = ''
             for v in model_spec['Other variables']: 
                 if v in X_names: 
                     continue
-                X_names_this_model = X_names + [v]
-                reg = LR(fit_intercept=False).fit(data[X_names_this_model], data[target_var])
-                r2 = reg.score(data[X_names_this_model], data[target_var])
+                X_names_for_this_model = X_names + [v]
+                model = self.FitOneModel_internal(data, X_names_for_this_model, target_var, model_spec['Relevance groups variable'], 1)
+                r2 = model.Score(data, target_var)
                 if r2 > r2_max:
                     r2_max = r2
                     next_candidate = v
+
+                betas = model.GetBetas()
+                record_index = pd.MultiIndex.from_arrays(
+                    [   [str(X_names_for_this_model) + '->' + target_var] * len(betas), 
+                        [round(r2, 3)] * len(betas), 
+                        betas.index
+                    ], names=['Model', 'R2', 'RG values']
+                ) 
                     
-                model_log.append(pd.Series(index=model_log_index))
-
-                model_log[-1]['Model'] = str(X_names_this_model)
-                model_log[-1]['R2'] = r2
-
-                for var, beta, pvalue in zip(X_names_this_model, reg.coef_, reg.p):
-                    model_log[-1]['Beta ' + var] = beta
-                    model_log[-1]['P-value ' + var] = pvalue
+                log_.append(betas.set_index(record_index))
             
-            print(next_candidate, 'is taken with R2: ', r2_max)
+            #print(next_candidate, 'is taken with R2: ', r2_max)
             X_names.append(next_candidate)
-            R2_log.append(r2_max)
-
+            r2_log_.append(r2_max)
+        
         fig, ax = plt.subplots() 
         x_axis = range(1, len(model_spec['Other variables']) + 1)
-        ax.plot(x_axis, R2_log)
+        ax.plot(x_axis, r2_log_)
+        ax.set_title(target_var)
         ax.set_xticks(x_axis)
+        
+        return pd.concat(log_)
 
-        return pd.DataFrame(model_log)
+    
+    def ValidateNonCampaignVariables(self, model_data: pd.DataFrame, model_spec: list) -> pd.DataFrame:
+        return pd.concat(
+            [self.__ValidateNonCampaignVariables_OneTarget(model_data, model_spec, t) for t in model_spec['Target variables']]
+        )
+
     
     def TransformCampaignVars_internal(self, model_data, model_spec):
         camp_vars = []
@@ -244,7 +250,7 @@ class MediaContributionCalculator:
             camp_vars.append(c['Name']+self.campaign_var_suffix)
         return camp_vars
     
-    def FitOneModel_internal(self, data,  X_names, y_name, RG_name=None, p_value=0.05): 
+    def FitOneModel_internal(self, data: pd.DataFrame,  X_names: list, y_name: str, RG_name=None, p_value: float =0.05) -> SubSampleRegression: 
         return SubSampleRegression(p_value).Fit(data, X_names, y_name, RG_name)
         
     
@@ -259,16 +265,17 @@ class MediaContributionCalculator:
         X_names = campaign_vars + model_spec['Other variables'] + ['Base']
         for rg_var in model_spec['Relevance groups variable']:
             for target_var in model_spec['Target variables']: 
-                reg = self.FitOneModel_internal(data, X_names, target_var, rg_var, 1)
-                r2 = round(reg.Score(data, target_var), 3)
+                model = self.FitOneModel_internal(data, X_names, target_var, rg_var, 1)
+                r2 = round(model.Score(data, target_var), 3)
+                betas = model.GetBetas()
                 index_arr = [
-                    [rg_var + '->' + target_var] * len(reg.betas), 
-                    [r2] * len(reg.betas), 
-                    reg.betas.index 
+                    [rg_var + '->' + target_var] * len(betas), 
+                    [r2] * len(betas), 
+                    betas.index 
                 ]
                 record_index = pd.MultiIndex.from_arrays(index_arr, names=['RG var -> target var', 'R2', 'RG values'])
                 log_.append(
-                    reg.betas.set_index(record_index)
+                    betas.set_index(record_index)
                 )
 
         return pd.concat(log_)

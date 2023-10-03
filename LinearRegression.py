@@ -53,14 +53,14 @@ class SubSampleRegression:
             assert s_name in data.columns, "SubSampleRegression: в данных нет переменных s_name"
             self.X_names = X_names
             self.s_name = s_name
-            self.fit_internal_split(data, y_name)
+            self.__fit_split(data, y_name)
         else:
             self.X_names = X_names
-            self.fit_internal_total(data, y_name)
+            self.__fit_total(data, y_name)
         
         return self
 
-    def fit_internal_split(self, data, y_name): 
+    def __fit_split(self, data, y_name): 
         self.betas = pd.DataFrame(columns=self.X_names)
         self.p_values = pd.DataFrame(columns=self.X_names)
 
@@ -70,10 +70,10 @@ class SubSampleRegression:
             self.betas.loc[sample, :] = pd.Series(reg.coef_, index=self.X_names)
             self.p_values.loc[sample, :] = pd.Series(reg.p, index=self.X_names)
         
-        self.set_significant_betas_internal()
+        self.__set_significant_betas()
         self.fit_done = True
 
-    def fit_internal_total(self, data, y_name): 
+    def __fit_total(self, data, y_name): 
         #self.betas = pd.DataFrame(columns=self.X_names)
         #self.p_values = pd.DataFrame(columns=self.X_names)
 
@@ -81,11 +81,11 @@ class SubSampleRegression:
         reg.fit(data[self.X_names], data[y_name])
         self.betas = pd.Series(reg.coef_, index=self.X_names)
         self.p_values = pd.Series(reg.p, index=self.X_names)
-        self.set_significant_betas_internal()
+        self.__set_significant_betas()
         
         self.fit_done = True
 
-    def set_significant_betas_internal(self): 
+    def __set_significant_betas(self): 
         self.betas_significant = self.betas.where(self.p_values < self.p_margin, 0)
 
     def Contributions(self, data): 
@@ -112,3 +112,24 @@ class SubSampleRegression:
         #y_actual = data[y_name] 
         #return 1 - ((y_actual - y_predicted) ** 2).sum() / ((y_actual - y_actual.mean()) ** 2).sum()
         return r2_score(data[y_name], self.Predict(data))
+    
+    def GetBetas(self) -> pd.DataFrame:
+        assert self.fit_done, "Еще не обучена"
+        if isinstance(self.betas, pd.DataFrame): 
+            return self.betas
+        else:
+            return pd.DataFrame([self.betas])
+        
+    def GetPValues(self) -> pd.DataFrame:
+        assert self.fit_done, "Еще не обучена"
+        if isinstance(self.p_values, pd.DataFrame): 
+            return self.p_values
+        else:
+            return pd.DataFrame([self.p_values])
+        
+    def GetBetasAndPValues(self) -> pd.DataFrame:
+        assert self.fit_done, "Еще не обучена"
+        bts, pvs = self.GetBetas(), self.GetPValues()
+        result = pd.concat([bts, pvs], axis=1)
+        result.columns = [['Beta'] * len(bts.columns) + ['P-value'] * len(pvs.columns), result.columns]
+        return result
