@@ -53,14 +53,14 @@ class SubSampleRegression:
             assert s_name in data.columns, "SubSampleRegression: в данных нет переменных s_name"
             self.X_names = X_names
             self.s_name = s_name
-            self.__fit_split(data, y_name)
+            self.__FitSplit(data, y_name)
         else:
             self.X_names = X_names
-            self.__fit_total(data, y_name)
+            self.__FitTotal(data, y_name)
         
         return self
 
-    def __fit_split(self, data, y_name): 
+    def __FitSplit(self, data, y_name): 
         self.betas = pd.DataFrame(columns=self.X_names)
         self.p_values = pd.DataFrame(columns=self.X_names)
 
@@ -70,10 +70,10 @@ class SubSampleRegression:
             self.betas.loc[sample, :] = pd.Series(reg.coef_, index=self.X_names)
             self.p_values.loc[sample, :] = pd.Series(reg.p, index=self.X_names)
         
-        self.__set_significant_betas()
+        self.__SetSignificantBetas()
         self.fit_done = True
 
-    def __fit_total(self, data, y_name): 
+    def __FitTotal(self, data, y_name): 
         #self.betas = pd.DataFrame(columns=self.X_names)
         #self.p_values = pd.DataFrame(columns=self.X_names)
 
@@ -81,30 +81,30 @@ class SubSampleRegression:
         reg.fit(data[self.X_names], data[y_name])
         self.betas = pd.Series(reg.coef_, index=self.X_names)
         self.p_values = pd.Series(reg.p, index=self.X_names)
-        self.__set_significant_betas()
+        self.__SetSignificantBetas()
         
         self.fit_done = True
 
-    def __set_significant_betas(self): 
+    def __SetSignificantBetas(self): 
         self.betas_significant = self.betas.where(self.p_values < self.p_margin, 0)
 
-    def Contributions(self, data): 
+    def Contributions(self, data: pd.DataFrame) -> pd.DataFrame: 
         assert self.fit_done, "Еще не обучена"
         if self.s_name:
-            return self.contributions_internal_split(data)
+            return self.__ContributionsSplit(data)
         else: 
-            return self.contributions_internal_total(data)
+            return self.__ContributionsTotal(data)
 
-    def contributions_internal_split(self, data): 
+    def __ContributionsSplit(self, data): 
         assert all([x in data.columns for x in self.X_names]), "SubSampleRegression: в данных нет переменных X_name"
         assert self.s_name in data.columns, "SubSampleRegression: в данных нет переменных s_name"
         return data[self.X_names].set_index([data.index, data[self.s_name]]).mul(self.betas_significant, level=1).set_index(data.index)
     
-    def contributions_internal_total(self, data): 
+    def __ContributionsTotal(self, data): 
         assert all([x in data.columns for x in self.X_names]), "SubSampleRegression: в данных нет переменных X_name"
         return data[self.X_names].mul(self.betas_significant)
     
-    def Predict(self, data): 
+    def Predict(self, data: pd.DataFrame) -> pd.DataFrame: 
         return self.Contributions(data).sum(axis=1)
     
     def Score(self, data: pd.DataFrame, y_name: str) -> float: 

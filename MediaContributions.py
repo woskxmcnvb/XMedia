@@ -10,6 +10,14 @@ from HillsTransformation import HillsTransformation
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+def AppendSeriesNameToItsValues(col: pd.Series) -> pd.Series:
+    return col.apply(lambda x: col.name + ' == ' + str(x))
+
+class ModelSpec: 
+    def __init__(self, model_spec: list): 
+        pass
+    
+
 
 class MediaContributionCalculator: 
     obligatory_sections = ['Target variables', 'Campaign variables']
@@ -109,8 +117,52 @@ class MediaContributionCalculator:
         
         return model_spec
         
+
+    def __ContributionsOneTarget(self, model_data: pd.DataFrame, model_spec: list, target_var: str) -> pd.DataFrame:
+        assert (model_spec['Relevance groups variable'] is None) or isinstance(model_spec['Relevance groups variable'], str), \
+            "Relevance groups variable здесь может быть или строкой или None, НЕ списком"
         
-    def ContributionsOneTarget(self, model_data, target_var, model_spec):
+        # копируем чтобы не сохранять мусор 
+        data = model_data.copy()
+        # diminishing return transformation
+        campaign_vars = self.__TransformCampaignVars(data, model_spec)
+        # intercept
+        data['Base'] = 1
+        
+        X_names = campaign_vars + model_spec['Other variables'] + ['Base']
+        model = self.__FitOneModel(data, X_names, target_var, model_spec['Relevance groups variable'], self.p_value)
+        contribs = model.Contributions(data) 
+        # добавляем исходную переменную для потсроения таблиц
+        contribs['Observed value'] = data[target_var]
+        
+        # for reporting total sample
+        data['Total'] = 'all'
+        if model_spec['Relevance groups variable'] and model_spec['Relevance groups variable'] not in model_spec['Subsample variables']:
+            rg_split = [model_spec['Relevance groups variable']]
+        else:
+            rg_split = []
+
+        reporting_splits = ['Total'] + rg_split + model_spec['Subsample variables']
+        reporting = []
+        for rs in reporting_splits: 
+            report = contribs.groupby(AppendSeriesNameToItsValues(data[rs])).mean()
+            report['Base'] -= (report.sum(axis=1) - 2 * report['Observed value'])
+            reporting.append(report.T.unstack())
+
+        #return contribs.groupby(AppendSeriesNameToItsValues(data[model_spec['Subsample variables'][0]])).mean()
+        return pd.concat(reporting).rename(target_var, inplace=True)
+
+
+    def GetContributions(self, model_data: pd.DataFrame, model_spec: list) -> pd.DataFrame: 
+        return pd.concat(
+            [self.__ContributionsOneTarget(model_data, model_spec, t) for t in model_spec['Target variables']], 
+            axis=1 
+        )
+    
+
+        
+    def ContributionsOneTarget_(self, model_data, target_var, model_spec):
+        
         assert isinstance(target_var, str), "ContributionsOneTarget: target_var должно быть строкой"
         assert target_var in model_data.columns, "ContributionsOneTarget: target_var нет в датасете"
         
@@ -164,11 +216,12 @@ class MediaContributionCalculator:
 
         return pd.concat(split_reports, keys=split_names).rename(target_var, inplace=True)
     
-    def ContributionsMultiTarget(self, model_data, model_spec):
-        #return [self.ContributionsOneTarget(model_data, t, model_spec) for t in model_spec['Target variables']]
-        
+
+
+    def ContributionsMultiTarget_OLD(self, model_data, model_spec):
+        # Старая версия, пока оставим для двойного теста
         return pd.concat(
-            [self.ContributionsOneTarget(model_data, t, model_spec) for t in model_spec['Target variables']], 
+            [self.ContributionsOneTarget_(model_data, t, model_spec) for t in model_spec['Target variables']], 
             axis=1
         )
     
@@ -195,7 +248,7 @@ class MediaContributionCalculator:
             "Ошибка спецификации: ожидается None или строка в Relevance groups variable"
 
         data = model_data.copy()
-        campaign_vars = self.TransformCampaignVars_internal(data, model_spec)
+        campaign_vars = self.__TransformCampaignVars(data, model_spec)
         data['Base'] = 1
 
         X_names = ['Base']
@@ -209,7 +262,7 @@ class MediaContributionCalculator:
                 if v in X_names: 
                     continue
                 X_names_for_this_model = X_names + [v]
-                model = self.FitOneModel_internal(data, X_names_for_this_model, target_var, model_spec['Relevance groups variable'], 1)
+                model = self.__FitOneModel(data, X_names_for_this_model, target_var, model_spec['Relevance groups variable'], 1)
                 r2 = model.Score(data, target_var)
                 if r2 > r2_max:
                     r2_max = r2
@@ -244,14 +297,14 @@ class MediaContributionCalculator:
         )
 
     
-    def TransformCampaignVars_internal(self, model_data, model_spec):
+    def __TransformCampaignVars(self, model_data, model_spec):
         camp_vars = []
         for c in model_spec['Campaign variables']:
             model_data[c['Name']+self.campaign_var_suffix] = HillsTransformation(model_data[c['Name']], c['Alpha'], c['Gamma'])
             camp_vars.append(c['Name']+self.campaign_var_suffix)
         return camp_vars
     
-    def FitOneModel_internal(self, data: pd.DataFrame,  X_names: list, y_name: str, RG_name: str=None, p_value: float =0.05) -> SubSampleRegression: 
+    def __FitOneModel(self, data: pd.DataFrame,  X_names: list, y_name: str, RG_name: str=None, p_value: float =0.05) -> SubSampleRegression: 
         return SubSampleRegression(p_value).Fit(data, X_names, y_name, RG_name)
         
     
@@ -259,14 +312,14 @@ class MediaContributionCalculator:
         assert(isinstance(model_spec['Relevance groups variable'], list)), "Ожидаем list в Relevance groups variable"
         
         data = model_data.copy()
-        campaign_vars = self.TransformCampaignVars_internal(data, model_spec)
+        campaign_vars = self.__TransformCampaignVars(data, model_spec)
         data['Base'] = 1
         
         log_ = []
         X_names = campaign_vars + model_spec['Other variables'] + ['Base']
         for rg_var in model_spec['Relevance groups variable']:
             for target_var in model_spec['Target variables']: 
-                model = self.FitOneModel_internal(data, X_names, target_var, rg_var, 1)
+                model = self.__FitOneModel(data, X_names, target_var, rg_var, 1)
                 r2 = round(model.Score(data, target_var), 3)
                 betas = model.GetBetas()
                 index_arr = [
@@ -300,7 +353,7 @@ class MediaContributionCalculator:
             for gamma in gamma_range: 
                 data[camp_var + '_dr_transformed'] = HillsTransformation(data[camp_var], alpha, gamma) 
                 X_names_for_this_model = [camp_var + '_dr_transformed'] + X_names
-                model = self.FitOneModel_internal(data, X_names_for_this_model, target_var, model_spec['Relevance groups variable'], 1)
+                model = self.__FitOneModel(data, X_names_for_this_model, target_var, model_spec['Relevance groups variable'], 1)
                 fit_results.loc[alpha, gamma] = model.Score(data, target_var)
                 
         fit_results.index.set_names('Alpha', inplace=True)
