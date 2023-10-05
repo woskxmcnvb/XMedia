@@ -40,8 +40,14 @@ class SubSampleRegression:
     fit_done = False
     version = 1.001
 
-    def __init__(self, p_value) -> None:
-        self.p_margin = p_value
+    def __init__(self, p_margin: float=0.05, second_run: bool=False):
+        """
+        p_margin - значение p выше которого считать бетту незначимой , 
+        second_run == False - обычная регрессия, незначимые бетты обнуляются
+        second_run == True - выкидываем переменные с незначимыми беттами и строим регрессию заново
+        """
+        self.p_margin = p_margin
+        self.second_run = second_run
 
     def Fit(self, data: pd.DataFrame, X_names: list, y_name: str, s_name=None):  
         assert all([x in data.columns for x in X_names]), "SubSampleRegression: в данных нет переменных X_name"
@@ -60,8 +66,24 @@ class SubSampleRegression:
         
         return self
 
+    def __FitSubSample(self, data, y_name): 
+        betas = pd.Series(0,index=self.X_names)
+        p_values = pd.Series(0, index=self.X_names)
+
+        X_names_for_reg = list(self.X_names)
+        reg = LR(fit_intercept=False).fit(data[X_names_for_reg], data[y_name])
+        if self.second_run:
+            X_names_for_reg = [name for i, name in enumerate(X_names_for_reg) if reg.p[i] < self.p_margin]
+            reg = LR(fit_intercept=False).fit(data[X_names_for_reg], data[y_name])
+
+        for i, name in enumerate(X_names_for_reg): 
+            betas[name] = reg.coef_[i]
+            p_values[name] = reg.p[i]
+        
+        return betas, p_values
+    
     def __FitSplit(self, data, y_name): 
-        self.betas = pd.DataFrame(columns=self.X_names)
+        """self.betas = pd.DataFrame(columns=self.X_names)
         self.p_values = pd.DataFrame(columns=self.X_names)
 
         for sample, data_chunk in data.groupby(self.s_name):
@@ -71,22 +93,66 @@ class SubSampleRegression:
             self.p_values.loc[sample, :] = pd.Series(reg.p, index=self.X_names)
         
         self.__SetSignificantBetas()
+        self.fit_done = True"""
+
+        self.betas = pd.DataFrame(columns=self.X_names)
+        self.p_values = pd.DataFrame(columns=self.X_names)
+
+        for sample, data_chunk in data.groupby(self.s_name):
+            self.betas.loc[sample, :], self.p_values.loc[sample, :] = self.__FitSubSample(data_chunk, y_name)
+        
+        self.__SetSignificantBetas()
         self.fit_done = True
 
     def __FitTotal(self, data, y_name): 
-        #self.betas = pd.DataFrame(columns=self.X_names)
-        #self.p_values = pd.DataFrame(columns=self.X_names)
+        ### V2
+        self.betas, self.p_values = self.__FitSubSample(data, y_name)
+        
+        self.__SetSignificantBetas()
+        self.fit_done = True
+        
+        ### V1
+        """self.betas = pd.Series(0,index=self.X_names)
+        self.p_values = pd.Series(0, index=self.X_names)
 
-        reg = LR(fit_intercept=False) 
-        reg.fit(data[self.X_names], data[y_name])
+        X_names_for_reg = list(self.X_names)
+        reg = LR(fit_intercept=False).fit(data[X_names_for_reg], data[y_name])
+        if self.second_run:
+            X_names_for_reg = [name for i, name in enumerate(X_names_for_reg) if reg.p[i] < self.p_margin]
+            reg = LR(fit_intercept=False).fit(data[X_names_for_reg], data[y_name])
+
+        for i, name in enumerate(X_names_for_reg): 
+            self.betas[name] = reg.coef_[i]
+            self.p_values[name] = reg.p[i]
+        
+        self.__SetSignificantBetas()
+        self.fit_done = True"""
+
+        ### V0 
+        """ reg = LR(fit_intercept=False).fit(data[self.X_names], data[y_name])
         self.betas = pd.Series(reg.coef_, index=self.X_names)
         self.p_values = pd.Series(reg.p, index=self.X_names)
+
         self.__SetSignificantBetas()
-        
         self.fit_done = True
 
+        if self.second_run:
+            X_names_second_run = [name for name in self.X_names if self.p_values[name] < self.p_margin]
+            reg_second = LR(fit_intercept=False).fit(data[X_names_second_run], data[y_name])
+            self.betas[:] = 0 
+            self.p_values[:] = 0
+            for i, name in enumerate(X_names_second_run): 
+                self.betas[name] = reg_second.coef_[i]
+                self.betas_significant[name] = reg_second.coef_[i]
+                self.p_values[name] = reg_second.p[i]"""
+
+
+
     def __SetSignificantBetas(self): 
-        self.betas_significant = self.betas.where(self.p_values < self.p_margin, 0)
+        if self.second_run: 
+            self.betas_significant = self.betas.copy()
+        else: 
+            self.betas_significant = self.betas.where(self.p_values < self.p_margin, 0)
 
     def Contributions(self, data: pd.DataFrame) -> pd.DataFrame: 
         assert self.fit_done, "Еще не обучена"
