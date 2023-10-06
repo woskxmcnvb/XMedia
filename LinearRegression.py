@@ -14,15 +14,14 @@ class LR(linear_model.LinearRegression):
     Additional attributes available after .fit()
     are `t` and `p` which are of the shape (y.shape[1], X.shape[1])
     which is (n_features, n_coefs)
-    This class sets the intercept to 0 by default, since usually we include it
-    in X.
+    This class sets the intercept to 0 by default, since usually we include it in X.
     """
 
     #def __init__(self, *args, **kwargs):
         #super(LR, self).__init__(*args, **kwargs)
     
-    def __init__(self, fit_intercept=True):
-        super(LR, self).__init__(fit_intercept=fit_intercept)
+    def __init__(self, fit_intercept=True, positive=False):
+        super(LR, self).__init__(fit_intercept=fit_intercept, positive=positive)
 
     def fit(self, X, y, n_jobs=1):
         self = super(LR, self).fit(X, y, n_jobs)
@@ -38,9 +37,8 @@ class LR(linear_model.LinearRegression):
 class SubSampleRegression:
     s_name = None
     fit_done = False
-    version = 1.001
 
-    def __init__(self, p_margin: float=0.05, second_run: bool=False):
+    def __init__(self, p_margin: float=0.05, second_run: bool=False, force_positive: bool=True):
         """
         p_margin - значение p выше которого считать бетту незначимой , 
         second_run == False - обычная регрессия, незначимые бетты обнуляются
@@ -48,6 +46,7 @@ class SubSampleRegression:
         """
         self.p_margin = p_margin
         self.second_run = second_run
+        self.positive = force_positive
 
     def Fit(self, data: pd.DataFrame, X_names: list, y_name: str, s_name=None):  
         assert all([x in data.columns for x in X_names]), "SubSampleRegression: в данных нет переменных X_name"
@@ -71,10 +70,10 @@ class SubSampleRegression:
         p_values = pd.Series(0, index=self.X_names)
 
         X_names_for_reg = list(self.X_names)
-        reg = LR(fit_intercept=False).fit(data[X_names_for_reg], data[y_name])
+        reg = LR(fit_intercept=False, positive=self.positive).fit(data[X_names_for_reg], data[y_name])
         if self.second_run:
             X_names_for_reg = [name for i, name in enumerate(X_names_for_reg) if reg.p[i] < self.p_margin]
-            reg = LR(fit_intercept=False).fit(data[X_names_for_reg], data[y_name])
+            reg = LR(fit_intercept=False, positive=self.positive).fit(data[X_names_for_reg], data[y_name])
 
         for i, name in enumerate(X_names_for_reg): 
             betas[name] = reg.coef_[i]

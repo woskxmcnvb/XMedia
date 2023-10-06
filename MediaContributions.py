@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 import json
+from copy import deepcopy
 
 from LinearRegression import LR, SubSampleRegression
 from HillsTransformation import HillsTransformation
@@ -14,9 +15,33 @@ def AppendSeriesNameToItsValues(col: pd.Series) -> pd.Series:
     return col.apply(lambda x: col.name + ' == ' + str(x))
 
 class ModelSpec: 
-    def __init__(self, model_spec: list): 
-        pass
+    def __init__(self, spec: list): 
+        if isinstance(spec, list):
+            self.__InitFromList(spec)
+        else:
+            assert False, "Не готово"
     
+    def __InitFromList(self, spec: list) -> None:
+        self.target = self.__ReadSection(spec, 'Target variables') 
+        self.non_camp = self.__ReadSection(spec, 'Other variables')
+        self.rg = self.__ReadSection(spec, 'Relevance groups variable')
+        self.split = self.__ReadSection(spec, 'Subsample variables')
+
+    def __ReadSection(self, spec: list, section_name: str) -> list:
+        if section_name not in spec.keys(): 
+            return []
+        if spec[section_name] is None:
+            return []
+        if isinstance(spec[section_name], str):
+            return [spec[section_name]]
+        if isinstance(spec[section_name], list):
+            assert all([isinstance(x, str) for x in spec[section_name]]), "Ошибка спецификации: где то не строка в " + section_name
+            return list(spec[section_name])
+        else:
+            assert False, "Ошибка спецификации: " + section_name + ". Принимаеися только None, строка, или список строк"
+
+    def __ReadCampaignSection(self, spec: list) -> list: 
+        return []
 
 
 class MediaContributionCalculator: 
@@ -116,16 +141,61 @@ class MediaContributionCalculator:
             assert x in model_data.columns, "Ошибка спецификации модели: Subsample variables '" + x + "' нет в данных"
         
         return model_spec
+    
+    def __TransformCampaignVars(self, model_data, model_spec):
+        camp_vars = []
+        for c in model_spec['Campaign variables']:
+            model_data[c['Name']+self.campaign_var_suffix] = HillsTransformation(model_data[c['Name']], c['Alpha'], c['Gamma'])
+            camp_vars.append(c['Name']+self.campaign_var_suffix)
+        return camp_vars
+    
+    def __FitOneModel(self, data: pd.DataFrame,  X_names: list, y_name: str, RG_name: str=None, p_value: float =0.05) -> SubSampleRegression: 
+        return SubSampleRegression(p_value).Fit(data, X_names, y_name, RG_name)
         
+    @staticmethod
+    def __PlotDRLines(model_data: pd.DataFrame, model_spec: dict, target: str) -> None:
+        x = np.arange(0, 20, dtype='double')
+        
+        fig, axs = plt.subplots(1, len(model_spec['Campaign variables']), figsize=(15, 5))
+        fig.suptitle('Target: {}'.format(target))
+        for ax, cvar in zip(axs, model_spec['Campaign variables']): 
+            ax.plot(
+                x, HillsTransformation(x, cvar['Alpha'], cvar['Gamma']), 
+                label='{} a: {}, g: {}'.format(cvar['Name'], str(cvar['Alpha']), str(cvar['Gamma']))
+                )
+            ax.set_xticks(x)
+            ax.legend()
+            ax.grid(True)
+        plt.show()
 
-    def __ContributionsOneTarget(self, model_data: pd.DataFrame, model_spec: list, target_var: str) -> pd.DataFrame:
+    
+    def __AdjustDiminishingReturnParams(self, model_data: pd.DataFrame, model_spec: dict, target_var: str) -> dict:
+        new_model_spec = deepcopy(model_spec)
+        #print("Target = ", target_var)
+        for cvar in new_model_spec['Campaign variables']: 
+            cvar['Alpha'], cvar['Gamma'] = self.__ExploreDiminishingReturn__OneTarget(model_data, model_spec, target_var, cvar['Name'], True)
+            #print(cvar['Name'], ':', cvar['Alpha'], cvar['Gamma'])
+        return new_model_spec
+
+    def __ContributionsOneTarget(self, 
+                                 model_data: pd.DataFrame, model_spec: list, 
+                                 target_var: str,
+                                 auto_diminishing_return: bool = False) -> pd.DataFrame:
         assert (model_spec['Relevance groups variable'] is None) or isinstance(model_spec['Relevance groups variable'], str), \
             "Relevance groups variable здесь может быть или строкой или None, НЕ списком"
         
         # копируем чтобы не сохранять мусор 
         data = model_data.copy()
+
+        # автоматический подбор параметров 
+        if auto_diminishing_return:
+            model_spec = self.__AdjustDiminishingReturnParams(model_data, model_spec, target_var)
+            MediaContributionCalculator.__PlotDRLines(data, model_spec, target_var)
+            
+
         # diminishing return transformation
         campaign_vars = self.__TransformCampaignVars(data, model_spec)
+        
         # intercept
         data['Base'] = 1
         
@@ -153,14 +223,16 @@ class MediaContributionCalculator:
         return pd.concat(reporting).rename(target_var, inplace=True)
 
 
-    def GetContributions(self, model_data: pd.DataFrame, model_spec: list) -> pd.DataFrame: 
+    def GetContributions(self, model_data: pd.DataFrame, model_spec: list, 
+                         auto_diminishing_return: bool = False) -> pd.DataFrame: 
         return pd.concat(
-            [self.__ContributionsOneTarget(model_data, model_spec, t) for t in model_spec['Target variables']], 
+            [self.__ContributionsOneTarget(model_data, model_spec, t, auto_diminishing_return) for t in model_spec['Target variables']], 
             axis=1 
         )
     
 
-        
+    """
+    # Старые версии  
     def ContributionsOneTarget_(self, model_data, target_var, model_spec):
         
         assert isinstance(target_var, str), "ContributionsOneTarget: target_var должно быть строкой"
@@ -223,7 +295,7 @@ class MediaContributionCalculator:
         return pd.concat(
             [self.ContributionsOneTarget_(model_data, t, model_spec) for t in model_spec['Target variables']], 
             axis=1
-        )
+        )"""
     
     
     def RunModelFromFilesSpec(self, data_file, spec_file, result_file=None): 
@@ -296,16 +368,6 @@ class MediaContributionCalculator:
             [self.__ValidateNonCampaignVariables_OneTarget(model_data, model_spec, t) for t in model_spec['Target variables']]
         )
 
-    
-    def __TransformCampaignVars(self, model_data, model_spec):
-        camp_vars = []
-        for c in model_spec['Campaign variables']:
-            model_data[c['Name']+self.campaign_var_suffix] = HillsTransformation(model_data[c['Name']], c['Alpha'], c['Gamma'])
-            camp_vars.append(c['Name']+self.campaign_var_suffix)
-        return camp_vars
-    
-    def __FitOneModel(self, data: pd.DataFrame,  X_names: list, y_name: str, RG_name: str=None, p_value: float =0.05) -> SubSampleRegression: 
-        return SubSampleRegression(p_value).Fit(data, X_names, y_name, RG_name)
         
     
     def ValidateRGVariables(self, model_data: pd.DataFrame, model_spec: dict) -> pd.DataFrame: 
@@ -335,14 +397,21 @@ class MediaContributionCalculator:
         return pd.concat(log_)
     
 
-    def __ExploreDiminishingReturn__OneTarget(self, model_data: pd.DataFrame, model_spec: list, target_var: str, camp_var: str) -> pd.DataFrame:
+    def __ExploreDiminishingReturn__OneTarget(self, 
+                                              model_data: pd.DataFrame, 
+                                              model_spec: list, 
+                                              target_var: str, 
+                                              camp_var: str, 
+                                              silent_mode: bool = False):
+        
         assert (model_spec['Relevance groups variable'] is None) or isinstance(model_spec['Relevance groups variable'], str), \
             "В этом тесте Relevance groups variable должно быть None или строкой"
         
-        alpha_range = [0.1, 0.2, 0.5, 1, 2, 4, 8, 16]
-        gamma_range = [1, 2, 4, 6, 8, 10, 12, 14]
+        alpha_range = [0.1, 0.2, 0.5, 1, 2, 4, 8]
+        gamma_range = [1, 2, 4, 6, 8, 10]
 
         fit_results = pd.DataFrame(index=alpha_range, columns=gamma_range, dtype='float')
+        #fit_results_pvalue = pd.DataFrame(index=alpha_range, columns=gamma_range, dtype='float')
         
         data = model_data.copy()
         data['Base'] = 1 
@@ -355,6 +424,7 @@ class MediaContributionCalculator:
                 X_names_for_this_model = [camp_var + '_dr_transformed'] + X_names
                 model = self.__FitOneModel(data, X_names_for_this_model, target_var, model_spec['Relevance groups variable'], 1)
                 fit_results.loc[alpha, gamma] = model.Score(data, target_var)
+                #fit_results_pvalue.loc[alpha, gamma] = model.GetPValues()[camp_var + '_dr_transformed'].max()
                 
         fit_results.index.set_names('Alpha', inplace=True)
         fit_results.columns.set_names('Gamma', inplace=True)
@@ -362,16 +432,22 @@ class MediaContributionCalculator:
         position_of_max = np.unravel_index(np.argmax(fit_results), fit_results.shape) 
         alpha_best = fit_results.index[position_of_max[0]]
         gamma_best = fit_results.columns[position_of_max[1]]
+        
+        # В режиме silent_mode, просто возвращаем найденные оптимумы
+        # В обычном режиме стром все графики
+        if silent_mode:
+            return alpha_best, gamma_best
+        
         print('For model {}->{}, best alpha: {}, best gamma: {}'.format(camp_var, target_var, alpha_best, gamma_best))
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5))
         sns.heatmap(fit_results, annot=True, ax=ax1)
         
+        #sns.heatmap(fit_results_pvalue, annot=True, ax=ax2, cmap='crest')
         x_line = np.arange(0, 30, dtype='double')
         ax2.plot(x_line, HillsTransformation(x_line, alpha_best, gamma_best), 
                 label='alpha:' + str(alpha_best) + ' gamma:' + str(gamma_best))
         ax2.legend()
-        
         plt.show()
         
         return fit_results.set_index(
