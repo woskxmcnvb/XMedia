@@ -14,20 +14,60 @@ import seaborn as sns
 def AppendSeriesNameToItsValues(col: pd.Series) -> pd.Series:
     return col.apply(lambda x: col.name + ' == ' + str(x))
 
+class CampaignVarSpec:
+    name = None
+    alpha = 2.0
+    gamma = 2.0
+    best_alpha = None 
+    best_gamma = None 
+    best_pvalue = None
+    
+    def __init__(self, Name: str, Alpha: float=None, Gamma: float=None) -> None: 
+        self.name = str(Name)
+        if Alpha:
+            self.alpha = Alpha
+        if Gamma: 
+            self.gamma = Gamma
+    
+    def __str__(self) -> str:
+        return 'a: {}, g: {} / bests: [{}, {}, {}]'.format(str(self.alpha), str(self.gamma), 
+                                                           str(self.best_alpha), str(self.best_gamma), str(self.best_pvalue))
+    
+    def ToDict(self) -> dict:
+        result = {}
+        result['Name'] = self.name
+        result['Alpha'] = self.alpha
+        result['Gamma'] = self.gamma
+        result['Best Alpha'] = self.best_alpha
+        result['Best Gamma'] = self.best_gamma
+        result['Best pvalue'] = self.best_pvalue
+        return result
+
 class ModelSpec: 
-    def __init__(self, spec: list): 
-        if isinstance(spec, list):
+    def __init__(self, spec: dict): 
+        if isinstance(spec, dict):
             self.__InitFromList(spec)
         else:
-            assert False, "Не готово"
+            raise Exception("Не готово")
+
+    def ToDict(self) -> dict: 
+        result = {}
+        result['Target variables'] = deepcopy(self.target)
+        result['Campaign variables'] = [cvar.ToDict() for cvar in self.camp]
+        result['Other variables'] = deepcopy(self.non_camp)
+        result['Relevance groups variable'] = deepcopy(self.rg)
+        result['Subsample variables'] = deepcopy(self.split)
+        return result
     
-    def __InitFromList(self, spec: list) -> None:
+    
+    def __InitFromList(self, spec: dict) -> None:
         self.target = self.__ReadSection(spec, 'Target variables') 
+        self.camp = self.__ReadCampaignVariableSection(spec)
         self.non_camp = self.__ReadSection(spec, 'Other variables')
         self.rg = self.__ReadSection(spec, 'Relevance groups variable')
         self.split = self.__ReadSection(spec, 'Subsample variables')
 
-    def __ReadSection(self, spec: list, section_name: str) -> list:
+    def __ReadSection(self, spec: dict, section_name: str) -> list:
         if section_name not in spec.keys(): 
             return []
         if spec[section_name] is None:
@@ -40,8 +80,28 @@ class ModelSpec:
         else:
             assert False, "Ошибка спецификации: " + section_name + ". Принимаеися только None, строка, или список строк"
 
-    def __ReadCampaignSection(self, spec: list) -> list: 
-        return []
+    def __ReadCampaignVariableSection(self, spec: dict) -> list: 
+        if 'Campaign variables' not in spec.keys(): 
+            return []
+        if spec['Campaign variables'] is None:
+            return []
+        if isinstance(spec['Campaign variables'], str):
+            return [CampaignVarSpec(spec['Campaign variables'])]
+        if isinstance(spec['Campaign variables'], list):
+            return [self.__ReadCampaignVariable(cvar) for cvar in spec['Campaign variables']] 
+        else: 
+            raise Exception("Ошибка спецификации: В Campaign variables принимаеися только None, строка, или список строк")
+    
+    def __ReadCampaignVariable(self, cvar): 
+        if isinstance(cvar, str): 
+            return CampaignVarSpec(cvar)
+        if isinstance(cvar, dict): 
+            return CampaignVarSpec(**cvar)
+             
+
+
+
+
 
 
 class MediaContributionCalculator: 
@@ -410,8 +470,8 @@ class MediaContributionCalculator:
         alpha_range = [0.1, 0.2, 0.5, 1, 2, 4, 8]
         gamma_range = [1, 2, 4, 6, 8, 10]
 
-        fit_results = pd.DataFrame(index=alpha_range, columns=gamma_range, dtype='float')
-        #fit_results_pvalue = pd.DataFrame(index=alpha_range, columns=gamma_range, dtype='float')
+        fit_results_r2 = pd.DataFrame(index=alpha_range, columns=gamma_range, dtype='float')
+        fit_results_pvalue = pd.DataFrame(index=alpha_range, columns=gamma_range, dtype='float')
         
         data = model_data.copy()
         data['Base'] = 1 
@@ -423,35 +483,34 @@ class MediaContributionCalculator:
                 data[camp_var + '_dr_transformed'] = HillsTransformation(data[camp_var], alpha, gamma) 
                 X_names_for_this_model = [camp_var + '_dr_transformed'] + X_names
                 model = self.__FitOneModel(data, X_names_for_this_model, target_var, model_spec['Relevance groups variable'], 1)
-                fit_results.loc[alpha, gamma] = model.Score(data, target_var)
-                #fit_results_pvalue.loc[alpha, gamma] = model.GetPValues()[camp_var + '_dr_transformed'].max()
+                fit_results_r2.loc[alpha, gamma] = model.Score(data, target_var)
+                fit_results_pvalue.loc[alpha, gamma] = model.GetPValues()[camp_var + '_dr_transformed'].min()
                 
-        fit_results.index.set_names('Alpha', inplace=True)
-        fit_results.columns.set_names('Gamma', inplace=True)
+        fit_results_r2.index.set_names('Alpha', inplace=True)
+        fit_results_r2.columns.set_names('Gamma', inplace=True)
         
-        position_of_max = np.unravel_index(np.argmax(fit_results), fit_results.shape) 
-        alpha_best = fit_results.index[position_of_max[0]]
-        gamma_best = fit_results.columns[position_of_max[1]]
+        position_of_max = np.unravel_index(np.argmax(fit_results_r2), fit_results_r2.shape) 
+        alpha_best = fit_results_r2.index[position_of_max[0]]
+        gamma_best = fit_results_r2.columns[position_of_max[1]]
         
         # В режиме silent_mode, просто возвращаем найденные оптимумы
         # В обычном режиме стром все графики
         if silent_mode:
-            return alpha_best, gamma_best
+            return alpha_best, gamma_best, fit_results_pvalue.min()
         
         print('For model {}->{}, best alpha: {}, best gamma: {}'.format(camp_var, target_var, alpha_best, gamma_best))
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5))
-        sns.heatmap(fit_results, annot=True, ax=ax1)
+        fig, axd = plt.subplot_mosaic([['ul', 'ur'], ['b', 'b']], figsize=(16, 10))
+        sns.heatmap(fit_results_r2, annot=True, ax=axd['ul'])
         
-        #sns.heatmap(fit_results_pvalue, annot=True, ax=ax2, cmap='crest')
+        sns.heatmap(fit_results_pvalue, annot=True, ax=axd['ur'], cmap='crest')
         x_line = np.arange(0, 30, dtype='double')
-        ax2.plot(x_line, HillsTransformation(x_line, alpha_best, gamma_best), 
-                label='alpha:' + str(alpha_best) + ' gamma:' + str(gamma_best))
-        ax2.legend()
+        axd['b'].plot(x_line, HillsTransformation(x_line, alpha_best, gamma_best), label='alpha:' + str(alpha_best) + ' gamma:' + str(gamma_best))
+        axd['b'].legend()
         plt.show()
         
-        return fit_results.set_index(
-            pd.MultiIndex.from_arrays([[camp_var + '->' + target_var] * len(fit_results), fit_results.index])
+        return fit_results_r2.set_index(
+            pd.MultiIndex.from_arrays([[camp_var + '->' + target_var] * len(fit_results_r2), fit_results_r2.index])
         )
     
     def __ExploreDiminishingReturn__MultiTarget(self, model_data: pd.DataFrame, model_spec: list, camp_var: str) -> pd.DataFrame:
